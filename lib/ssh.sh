@@ -23,7 +23,12 @@ ssh_setup() {
         # treats -p as the port. -o Port works for both ssh and scp.
         -o "Port=${CFG_SERVER_PORT}"
     )
-    [[ -n "$CFG_SERVER_SSH_KEY" ]] && _SSH_OPTS+=(-i "$CFG_SERVER_SSH_KEY" -o "IdentitiesOnly=yes")
+    # NB: use an `if` (not `[[ ... ]] && ...`) — as the function's last
+    # statement a false `[[ ]]` would return 1 and, under `set -e`, abort
+    # the whole script right after ssh_setup when no ssh_key is configured.
+    if [[ -n "$CFG_SERVER_SSH_KEY" ]]; then
+        _SSH_OPTS+=(-i "$CFG_SERVER_SSH_KEY" -o "IdentitiesOnly=yes")
+    fi
 }
 
 ssh_cleanup() {

@@ -1,0 +1,13 @@
+# Real config & secrets — never commit
+hoist.yml
+.env
+*.env
+!hoist.example.yml
+
+# Local staging / scratch
+.hoist/
+*.log
+
+# Tooling state
+.omc/
+.claude/

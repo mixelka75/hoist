@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# ─── hoist ─────────────────────────────────────────────────────
+# One config, one command. Reads hoist.yml locally, securely ships
+# .env over SSH, and drives a server-side bootstrap that clones the app,
+# runs docker compose, configures nginx + TLS, and installs R2 backups.
+#
+#   hoist up        # first-time full deploy
+#   hoist deploy    # pull + rebuild + restart
+#   hoist env       # re-push .env and restart
+#   hoist nginx     # regenerate nginx sites + reload
+#   hoist backup    # run a backup now
+#   hoist logs [svc] # follow compose logs
+#   hoist status    # compose ps + nginx + cron
+#   hoist ssh       # shell into the app dir on the server
+#
+# Flags: -c/--config FILE (default ./hoist.yml), --dry-run, -h
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/log.sh
+source "${SCRIPT_DIR}/lib/log.sh"
+# shellcheck source=lib/config.sh
+source "${SCRIPT_DIR}/lib/config.sh"
+# shellcheck source=lib/ssh.sh
+source "${SCRIPT_DIR}/lib/ssh.sh"
+
+VERSION="0.1.0"
+REMOTE_RUN=".hoist/_run"   # staging dir on server, relative to remote home
+CONFIG_FILE="hoist.yml"
+DRY_RUN=""
+declare -a ARGS=()
+
+usage() {
+    # Print the leading comment block (after the shebang), stripping "# ".
+    awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
+}
+
+# ─── Staging: assemble everything the server bootstrap needs ────────
+# All files land in one dir so remote scripts can source siblings.
+stage_build() {
+    local stage; stage="$(mktemp -d "${TMPDIR:-/tmp}/hoist-stage.XXXXXX")"
+    cp "${SCRIPT_DIR}"/remote/*.sh "$stage"/
+    cp "${SCRIPT_DIR}/lib/log.sh"  "$stage/log.sh"
+    mkdir -p "$stage/templates"
+    cp "${SCRIPT_DIR}/templates/nginx-site.conf.tmpl" "$stage/templates/"
+    config_write_deploy_env "$stage/deploy.env"
+    printf '%s' "$DOMAINS_TSV" > "$stage/domains.tsv"
+    if [[ -f "$CFG_APP_ENV_FILE" ]]; then
+        cp "$CFG_APP_ENV_FILE" "$stage/app.env"
+        info "Including env file: $CFG_APP_ENV_FILE"
+    else
+        warn "Env file '$CFG_APP_ENV_FILE' not found locally — deploying without .env"
+    fi
+    printf '%s' "$stage"
+}
+
+# Stage locally then push to the server and run bootstrap with an action.
+run_remote_bootstrap() {
+    local action="$1" stage
+    config_load "$CONFIG_FILE"
+    ssh_setup
+    trap ssh_cleanup EXIT
+    stage="$(stage_build)"
+    info "Uploading deploy bundle to ${SSH_TARGET}:${REMOTE_RUN}"
+    scp_dir "$stage" "$REMOTE_RUN"
+    rm -rf "$stage"
+    section "Running server bootstrap (${action})"
+    ssh_run_tty "chmod +x ${REMOTE_RUN}/*.sh && bash ${REMOTE_RUN}/bootstrap.sh ${action}"
+}
+
+cmd_up()      { run_remote_bootstrap up; finished_banner; }
+cmd_deploy()  { run_remote_bootstrap deploy; finished_banner; }
+cmd_env()     { run_remote_bootstrap restart; }
+cmd_nginx()   { run_remote_bootstrap nginx; }
+
+finished_banner() {
+    [[ -n "$DRY_RUN" ]] && return 0
+    section "Deployed"
+    local d up _s _w
+    while IFS=$'\x1f' read -r d up _s _w; do
+        [[ -z "$d" ]] && continue
+        ok "https://${d}  ->  ${up}"
+    done <<< "$DOMAINS_TSV"
+}
+
+cmd_backup() {
+    config_load "$CONFIG_FILE"
+    ssh_setup; trap ssh_cleanup EXIT
+    section "Running backup now"
+    ssh_run_tty "/opt/hoist/backup.sh"
+}
+
+cmd_logs() {
+    config_load "$CONFIG_FILE"
+    ssh_setup; trap ssh_cleanup EXIT
+    local svc="${ARGS[0]:-}"
+    ssh_run_tty "cd '${CFG_APP_DIR}' && docker compose -f '${CFG_APP_COMPOSE_FILE}' logs --tail=200 -f ${svc}"
+}
+
+cmd_status() {
+    config_load "$CONFIG_FILE"
+    ssh_setup; trap ssh_cleanup EXIT
+    ssh_run "cd '${CFG_APP_DIR}' && docker compose -f '${CFG_APP_COMPOSE_FILE}' ps; \
+             echo; systemctl is-active nginx 2>/dev/null | sed 's/^/nginx: /'; \
+             echo; crontab -l 2>/dev/null | grep 'hoist-backup' || echo 'no backup cron'"
+}
+
+cmd_ssh() {
+    config_load "$CONFIG_FILE"
+    ssh_setup; trap ssh_cleanup EXIT
+    ssh_run_tty "cd '${CFG_APP_DIR}' 2>/dev/null; exec \$SHELL -l"
+}
+
+# ─── Arg parsing ────────────────────────────────────────────────────
+COMMAND=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c|--config) CONFIG_FILE="$2"; shift 2 ;;
+        --dry-run)   DRY_RUN=1; shift ;;
+        -h|--help)   usage; exit 0 ;;
+        -v|--version) echo "hoist ${VERSION}"; exit 0 ;;
+        -*)          die "Unknown flag: $1" ;;
+        *)
+            if [[ -z "$COMMAND" ]]; then COMMAND="$1"; else ARGS+=("$1"); fi
+            shift ;;
+    esac
+done
+
+[[ -n "$DRY_RUN" ]] && warn "DRY-RUN: no remote changes will be made"
+
+case "${COMMAND:-help}" in
+    up)      cmd_up ;;
+    deploy)  cmd_deploy ;;
+    env)     cmd_env ;;
+    nginx)   cmd_nginx ;;
+    backup)  cmd_backup ;;
+    logs)    cmd_logs ;;
+    status)  cmd_status ;;
+    ssh)     cmd_ssh ;;
+    help)    usage ;;
+    *)       err "Unknown command: $COMMAND"; usage; exit 1 ;;
+esac

@@ -1,0 +1,47 @@
+# ─── hoist config ──────────────────────────────────────────────
+# Copy to hoist.yml, fill in, then run:  ./hoist up
+# Secrets (DB password, R2 keys) live ONLY in your .env — here you just
+# reference their variable names.
+
+server:
+  host: 1.2.3.4            # server IP or hostname (required)
+  user: root              # SSH user with sudo/root (default: root)
+  port: 22                # SSH port (default: 22)
+  ssh_key: ~/.ssh/id_ed25519   # optional; omit to use ssh-agent / default key
+
+app:
+  name: myapp             # short name, used for backup prefix & cron (required)
+  repo: git@github.com:user/repo.git   # app repository (required)
+  branch: main            # branch to deploy (default: main)
+  dir: /opt/myapp         # where to clone on the server (required)
+  private: true           # true -> setup-dk deploy-key flow; false -> plain clone
+  compose_file: docker-compose.yml     # path inside the repo (default)
+  env_file: .env          # local file scp'd to <dir>/.env (mode 600)
+
+# One or more domains -> upstream (the host:port your compose service exposes).
+domains:
+  - domain: example.com
+    upstream: 127.0.0.1:3000
+    ssl: true             # obtain a Let's Encrypt cert via certbot
+    www_redirect: true    # also serve/cert www.example.com
+
+ssl:
+  email: you@example.com  # required when any domain has ssl: true (certbot)
+
+# Optional: nightly DB dump -> Cloudflare R2 with retention.
+backup:
+  enabled: true
+  schedule: "0 3 * * *"   # cron expression (server local time)
+  retention_days: 14      # delete R2 objects older than this
+  database:
+    type: postgres        # postgres | mysql
+    container: db         # compose service/container name of the DB
+    name: mydb
+    user: postgres
+    password_env: POSTGRES_PASSWORD   # name of the var in .env holding the password
+  r2:
+    account_id: "your-cloudflare-account-id"
+    bucket: my-backups
+    prefix: myapp         # path prefix inside the bucket (default: app.name)
+    access_key_id_env: R2_ACCESS_KEY_ID          # var name in .env
+    secret_access_key_env: R2_SECRET_ACCESS_KEY  # var name in .env

@@ -1,76 +1,76 @@
 # hoist
 
-One config, one command. Describe a deployment in a single `hoist.yml`,
-run `./hoist up` from your laptop, and the server gets:
+Один конфиг, одна команда. Описываешь деплой в единственном `hoist.yml`,
+запускаешь `./hoist up` со своего ноутбука — и на сервере появляется:
 
-- the app **cloned** (private repos via the [setup-dk](https://github.com/mixelka75/setup-dk) deploy-key flow),
-- services up with **Docker Compose**,
-- an **nginx** reverse proxy per domain + **Let's Encrypt** TLS,
-- your **`.env`** copied over securely (scp, mode 600),
-- nightly **database backups to Cloudflare R2** with retention, via cron.
+- приложение, **склонированное** из репы (приватные — через deploy-key flow [setup-dk](https://github.com/mixelka75/setup-dk));
+- поднятые сервисы через **Docker Compose**;
+- **nginx** как обратный прокси на каждый домен + TLS-сертификат **Let's Encrypt**;
+- твой **`.env`**, безопасно скопированный по scp (права 600);
+- ночные **бэкапы базы в Cloudflare R2** с ротацией, через cron.
 
-It's plain Bash on your side and on the server — the only hard dependency it
-installs locally is [`yq`](https://github.com/mikefarah/yq) (auto-installed to
-`~/.local/bin` if missing). Everything heavy (Docker, nginx, certbot, rclone)
-is installed on the server automatically and idempotently.
+Это чистый Bash и у тебя, и на сервере. Единственная зависимость локально —
+[`yq`](https://github.com/mikefarah/yq) (ставится автоматически в `~/.local/bin`,
+если его нет). Всё тяжёлое (Docker, nginx, certbot, rclone) ставится на сервер
+само и идемпотентно.
 
-## How it works
+## Как это работает
 
 ```
- laptop                                  server
+ ноутбук                                 сервер
  ┌────────────────────┐  ssh/scp   ┌──────────────────────────────┐
- │ hoist up       │ ─────────▶ │ ~/.hoist/_run/bootstrap │
- │  • parse YAML (yq)  │            │  • install deps              │
- │  • render deploy.env│            │  • clone repo (setup-dk)     │
- │  • scp .env + bundle│            │  • place .env (600)          │
- └────────────────────┘            │  • nginx site + certbot      │
+ │ hoist up            │ ─────────▶ │ ~/.hoist/_run/bootstrap      │
+ │  • парсит YAML (yq) │            │  • ставит зависимости        │
+ │  • рендерит deploy.env           │  • клонит репу (setup-dk)    │
+ │  • scp .env + бандл │            │  • кладёт .env (600)         │
+ └────────────────────┘            │  • nginx сайт + certbot      │
                                     │  • docker compose up -d      │
-                                    │  • rclone R2 + backup cron   │
+                                    │  • rclone R2 + cron бэкапы   │
                                     └──────────────────────────────┘
 ```
 
-All logic lives locally; the server only executes. The CLI bundles the
-`remote/` scripts + a generated `deploy.env` (resolved scalars) + `domains.tsv`
-+ your `.env`, ships them to `~/.hoist/_run`, and runs `bootstrap.sh`.
+Вся логика — локально, сервер только исполняет. CLI собирает бандл из скриптов
+`remote/` + сгенерированный `deploy.env` (готовые значения) + `domains.tsv` +
+твой `.env`, отправляет это в `~/.hoist/_run` и запускает `bootstrap.sh`.
 
-## Quick start
+## Быстрый старт
 
 ```bash
 cp hoist.example.yml hoist.yml
-$EDITOR hoist.yml          # set server, repo, domain, backup
-$EDITOR .env                    # app secrets: DB password, R2 keys, ...
+$EDITOR hoist.yml          # сервер, репа, домен, бэкапы
+$EDITOR .env              # секреты приложения: пароль БД, ключи R2, ...
 
-./hoist up                 # full first deploy
+./hoist up                # полный первый деплой
 ```
 
-Preview without touching the server:
+Посмотреть, что будет, не трогая сервер:
 
 ```bash
 ./hoist up --dry-run
 ```
 
-## Commands
+## Команды
 
-| Command | What it does |
+| Команда | Что делает |
 |---|---|
-| `hoist up` | First full deploy: deps → clone → .env → nginx+TLS → compose → backup cron |
+| `hoist up` | Полный первый деплой: зависимости → клон → .env → nginx+TLS → compose → cron бэкапов |
 | `hoist deploy` | `git pull` + `docker compose up -d --build` |
-| `hoist env` | Re-push `.env` and restart services |
-| `hoist nginx` | Regenerate nginx sites + reload + certbot |
-| `hoist backup` | Run a backup to R2 right now |
-| `hoist logs [svc]` | Follow `docker compose logs` |
-| `hoist status` | `compose ps` + nginx + cron status |
-| `hoist ssh` | Open a shell in the app dir on the server |
+| `hoist env` | Перезалить `.env` и перезапустить сервисы |
+| `hoist nginx` | Перегенерить nginx-сайты + reload + certbot |
+| `hoist backup` | Сделать бэкап в R2 прямо сейчас |
+| `hoist logs [svc]` | Следить за `docker compose logs` |
+| `hoist status` | `compose ps` + статус nginx и cron |
+| `hoist ssh` | Открыть шелл в каталоге приложения на сервере |
 
-Flags: `-c FILE` (config, default `./hoist.yml`), `--dry-run`, `-h`, `-v`.
+Флаги: `-c FILE` (конфиг, по умолчанию `./hoist.yml`), `--dry-run`, `-h`, `-v`.
 
-## Config
+## Конфиг
 
-See [`hoist.example.yml`](hoist.example.yml). Key idea: **secrets stay
-in `.env`** (which is gitignored and scp'd securely). In the YAML you only
-reference variable *names* (`password_env`, `access_key_id_env`, …).
+Смотри [`hoist.example.yml`](hoist.example.yml). Главная идея: **секреты живут
+только в `.env`** (он в `.gitignore` и доставляется по scp). В YAML ты указываешь
+лишь *имена* переменных (`password_env`, `access_key_id_env`, …).
 
-Your `.env` must contain whatever the YAML references, e.g.:
+В твоём `.env` должно быть то, на что ссылается YAML, например:
 
 ```dotenv
 POSTGRES_PASSWORD=super-secret
@@ -78,18 +78,19 @@ R2_ACCESS_KEY_ID=xxxxxxxx
 R2_SECRET_ACCESS_KEY=yyyyyyyy
 ```
 
-## Requirements
+## Требования
 
-- **Local:** bash 4+, `ssh`, `scp`, `git`, `curl`. `yq` auto-installs if absent.
-- **Server:** a fresh Debian/Ubuntu or RHEL/Fedora box reachable over SSH with a
-  sudo/root user. Docker, nginx, certbot and rclone are installed for you.
-- **DNS:** point each domain's A record at the server *before* `up`, so certbot
-  can validate. If DNS isn't ready, the site still serves on HTTP and you can
-  re-run `hoist nginx` later to get the cert.
+- **Локально:** bash 4+, `ssh`, `scp`, `git`, `curl`. `yq` доустановится сам.
+- **Сервер:** свежая Debian/Ubuntu или RHEL/Fedora, доступная по SSH, с
+  sudo/root-пользователем. Docker, nginx, certbot и rclone ставятся за тебя.
+- **DNS:** A-запись каждого домена должна указывать на сервер *до* `up`, чтобы
+  certbot прошёл валидацию. Если DNS ещё не прописан — сайт поднимется по HTTP,
+  а сертификат можно дополучить позже через `hoist nginx`.
 
-## Backups & restore
+## Бэкапы и восстановление
 
-Backups land in `r2:<bucket>/<prefix>/<app>-<timestamp>.sql.gz`. Restore example:
+Бэкапы кладутся в `r2:<bucket>/<prefix>/<app>-<timestamp>.sql.gz`. Пример
+восстановления:
 
 ```bash
 rclone copy r2:my-backups/myapp/myapp-20260525-030000.sql.gz .
@@ -97,11 +98,12 @@ gunzip -c myapp-20260525-030000.sql.gz | \
   docker compose exec -T db psql -U postgres mydb
 ```
 
-## Notes
+## Заметки
 
-- nginx and certbot run on the host (simpler cert issuance/renewal); your app
-  ports are bound to `127.0.0.1` in compose and proxied.
-- Re-running `hoist up` is safe (idempotent): existing repo is pulled,
-  deps are skipped if present, the cron entry is replaced not duplicated.
-- The setup-dk script is vendored in `remote/setup-deploy-key.sh`; for private
-  repos it prints a deploy public key and waits for you to add it to the repo.
+- nginx и certbot работают на хосте (так проще выпускать и продлевать
+  сертификаты); порты приложения вешаются на `127.0.0.1` в compose и проксируются.
+- Повторный `hoist up` безопасен (идемпотентность): существующая репа
+  подтягивается через pull, уже стоящие зависимости пропускаются, строка cron
+  заменяется, а не дублируется.
+- Скрипт setup-dk вшит в `remote/setup-deploy-key.sh`: для приватных реп он
+  печатает публичный deploy-ключ и ждёт, пока ты добавишь его в репозиторий.

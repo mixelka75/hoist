@@ -29,6 +29,12 @@ _nginx_render_site() {
     printf '%s\n' "$content" | $SUDO tee "${_NGINX_CONFD}/${domain}.conf" >/dev/null
 }
 
+# True if NAME resolves to any A/AAAA address. Used to avoid requesting a
+# TLS cert for a name with no DNS — which would fail the whole certificate.
+_domain_resolves() {
+    getent ahosts "$1" >/dev/null 2>&1
+}
+
 nginx_configure() {
     section "Configuring nginx"
     [[ -f "$_NGINX_TEMPLATE" ]] || die "nginx template missing: $_NGINX_TEMPLATE"
@@ -51,17 +57,39 @@ nginx_configure() {
     $SUDO systemctl reload nginx 2>/dev/null || $SUDO nginx -s reload
     ok "nginx reloaded."
 
-    # Obtain TLS certificates after nginx serves HTTP (needed for HTTP-01).
+    # Obtain TLS certs after nginx serves HTTP (needed for HTTP-01). Only
+    # names that actually resolve are requested, so a missing www record or
+    # not-yet-pointed DNS never sinks the whole certificate.
     while IFS=$'\x1f' read -r domain upstream ssl www; do
         [[ -z "$domain" ]] && continue
-        [[ "$ssl" == "true" ]] || { warn "SSL disabled for $domain — skipping certbot"; continue; }
+        if [[ "$ssl" != "true" ]]; then
+            warn "SSL disabled for $domain — skipping certbot"
+            continue
+        fi
 
-        local cargs=(-d "$domain")
-        [[ "$www" == "true" ]] && cargs+=(-d "www.$domain")
-        info "Requesting certificate for $domain ..."
-        $SUDO certbot --nginx "${cargs[@]}" \
-            --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect || \
-            warn "certbot failed for $domain (DNS not pointed yet?) — site still serves on HTTP"
+        local cargs=() names=()
+        if _domain_resolves "$domain"; then
+            cargs+=(-d "$domain"); names+=("$domain")
+        else
+            warn "$domain has no DNS record yet — skipping TLS. Point DNS here, then: hoist nginx"
+            continue
+        fi
+        if [[ "$www" == "true" ]]; then
+            if _domain_resolves "www.$domain"; then
+                cargs+=(-d "www.$domain"); names+=("www.$domain")
+            else
+                warn "www.$domain has no DNS record — issuing cert for $domain only (add www later, then: hoist nginx)"
+            fi
+        fi
+
+        info "Requesting certificate for: ${names[*]}"
+        if $SUDO certbot --nginx "${cargs[@]}" \
+                --non-interactive --agree-tos -m "$SSL_EMAIL" \
+                --redirect --expand --keep-until-expiring; then
+            ok "TLS ready for ${names[*]}"
+        else
+            warn "certbot failed for $domain — site still serves on HTTP (re-run: hoist nginx)"
+        fi
     done < "${SCRIPT_DIR}/domains.tsv"
 
     ok "nginx configuration complete."

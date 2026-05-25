@@ -14,7 +14,7 @@
 #   hoist ssh       # shell into the app dir on the server
 #
 # Flags: -c/--config FILE (default ./hoist.yml), --dry-run, -h
-set -euo pipefail
+set -Eeuo pipefail   # -E: ERR trap inherited by functions and subshells
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/log.sh
@@ -23,6 +23,15 @@ source "${SCRIPT_DIR}/lib/log.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
 # shellcheck source=lib/ssh.sh
 source "${SCRIPT_DIR}/lib/ssh.sh"
+
+# Legible failures: report the line instead of dying silently. Any open SSH
+# ControlMaster is still torn down by the per-command EXIT trap.
+_on_err() {
+    local code=$? line="${1:-?}"
+    err "hoist aborted (line ${line}, exit ${code})"
+    exit "$code"
+}
+trap '_on_err "$LINENO"' ERR
 
 VERSION="0.1.0"
 REMOTE_RUN=".hoist/_run"   # staging dir on server, relative to remote home
@@ -126,7 +135,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$DRY_RUN" ]] && warn "DRY-RUN: no remote changes will be made"
+if [[ -n "$DRY_RUN" ]]; then warn "DRY-RUN: no remote changes will be made"; fi
 
 case "${COMMAND:-help}" in
     up)      cmd_up ;;

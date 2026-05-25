@@ -55,6 +55,9 @@ install_backup() {
 
     local marker="# hoist-backup:${APP_NAME}"
     local line="${BACKUP_SCHEDULE} ${PERSIST_DIR}/backup.sh >> ${PERSIST_DIR}/backup.log 2>&1 ${marker}"
-    ( crontab -l 2>/dev/null | grep -vF "$marker"; echo "$line" ) | crontab -
+    # Drop any previous entry for this app, then append the fresh one. `|| true`
+    # absorbs the expected non-zero on a fresh server (no crontab yet →
+    # `crontab -l` exits 1; empty input → `grep` exits 1) under set -e/pipefail.
+    ( crontab -l 2>/dev/null | grep -vF "$marker" || true; echo "$line" ) | crontab -
     ok "Cron installed: ${BACKUP_SCHEDULE} -> ${PERSIST_DIR}/backup.sh"
 }

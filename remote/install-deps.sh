@@ -75,5 +75,18 @@ install_deps() {
             $PKG_INSTALL rclone
     fi
 
+    # cron — runs the scheduled R2 backups (the crontab is set later).
+    if command -v crontab >/dev/null 2>&1; then
+        ok "cron already installed"
+    else
+        info "Installing cron ..."
+        case "$PKG" in
+            apt)     $PKG_INSTALL cron ;;
+            dnf|yum) $PKG_INSTALL cronie ;;
+        esac
+    fi
+    $SUDO systemctl enable --now cron 2>/dev/null \
+        || $SUDO systemctl enable --now crond 2>/dev/null || true
+
     ok "Dependencies ready."
 }
